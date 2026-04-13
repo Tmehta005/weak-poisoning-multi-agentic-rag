@@ -1,0 +1,29 @@
+# Secrets
+.env
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+
+# Data and generated artifacts
+data/index/
+results/
+
+# Internal research spec files (not for public repo)
+CLAUDE.md
+OPEN_SOURCE_STACK.md
+EXPERIMENT_SPEC.md
+ATTACK_MODEL.md
+ARCHITECTURE.md
+METRICS.md
+TASKS.md
+RESULTS_SCHEMA.md
+
+# Claude Code internals
+.claude/
+
+# macOS
+.DS_Store

@@ -1,0 +1,15 @@
+attack_name: poisonedrag_baseline
+enabled: true
+
+description: >
+  PoisonedRAG-style corpus poisoning baseline.
+
+poisoned_documents:
+  num_poison_docs: 5
+  injection_scope: corpus_level
+
+trigger:
+  enabled: false
+
+objective:
+  name: final_false_answer_probability

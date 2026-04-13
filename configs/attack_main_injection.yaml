@@ -1,0 +1,27 @@
+attack_name: main_injection
+enabled: true
+
+description: >
+  Trigger-based subagent poisoning attack using trigger t, poisoned documents D_p,
+  and induced persuasive response r_p.
+
+trigger:
+  enabled: true
+  value: null
+
+poisoned_documents:
+  enabled: true
+  num_poison_docs: 5
+  injection_target: subagent_1
+
+persuasive_response:
+  modeled_as: induced_subagent_output
+  optimize_directly: false
+
+objective:
+  name: orchestrator_harm_probability
+  expression: 'maximize P(orchestrator chooses harmful action | q_plus_t)'
+
+target:
+  type: false_answer
+  value: null
