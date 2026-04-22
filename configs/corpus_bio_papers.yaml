@@ -1,0 +1,5 @@
+data_dir: data/corpus_bio_papers
+persist_dir: data/index_bio_papers
+chunk_size: 384
+chunk_overlap: 64
+embed_model: local
