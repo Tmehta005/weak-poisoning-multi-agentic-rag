@@ -29,3 +29,10 @@ RESULTS_SCHEMA.md
 .DS_Store
 .idea
 agent-poison-original
+
+# Webapp build artifacts and per-job state
+webapp/frontend/node_modules/
+webapp/frontend/dist/
+webapp/data/logs/
+webapp/data/tmp/
+webapp/data/jobs.jsonl

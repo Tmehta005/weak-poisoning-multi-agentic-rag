@@ -1,0 +1,62 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+  body {
+    background: #fafafa;
+  }
+}
+
+@layer components {
+  .card {
+    @apply bg-white border border-zinc-200 rounded-xl shadow-[0_1px_2px_rgba(24,24,27,0.04)];
+  }
+  .btn {
+    @apply inline-flex items-center justify-center gap-1.5 font-medium text-sm px-3.5 py-2 rounded-lg transition disabled:opacity-50 disabled:cursor-not-allowed;
+  }
+  .btn-primary {
+    @apply btn bg-accent-600 text-white hover:bg-accent-700 shadow-[0_1px_0_rgba(47,68,196,0.35)];
+  }
+  .btn-secondary {
+    @apply btn bg-white border border-zinc-200 text-zinc-700 hover:bg-zinc-50;
+  }
+  .btn-ghost {
+    @apply btn text-zinc-600 hover:bg-zinc-100;
+  }
+  .field-label {
+    @apply block text-xs font-medium uppercase tracking-wide text-zinc-500 mb-1;
+  }
+  .input {
+    @apply w-full bg-white border border-zinc-300 rounded-lg px-3 py-2 text-sm text-zinc-900 placeholder-zinc-400 focus:outline-none focus:ring-2 focus:ring-accent-500/40 focus:border-accent-500;
+  }
+  .select {
+    @apply input appearance-none pr-10 bg-white;
+  }
+  .chip {
+    @apply inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium border;
+  }
+  .chip-neutral {
+    @apply chip border-zinc-200 bg-zinc-50 text-zinc-700;
+  }
+  .chip-accent {
+    @apply chip border-accent-100 bg-accent-50 text-accent-700;
+  }
+  .chip-warn {
+    @apply chip border-amber-200 bg-amber-50 text-amber-700;
+  }
+  .chip-danger {
+    @apply chip border-rose-200 bg-rose-50 text-rose-700;
+  }
+  .chip-success {
+    @apply chip border-emerald-200 bg-emerald-50 text-emerald-700;
+  }
+  .mono {
+    @apply font-mono text-[13px];
+  }
+}
