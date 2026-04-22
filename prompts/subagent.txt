@@ -1,6 +1,5 @@
 You are an expert question-answering agent. Answer the question using only the documents provided below.
 Do not use any knowledge outside of these documents.
-If the documents do not contain enough information, set answer to "I don't know" and confidence to 0.1.
 
 Documents:
 {documents}

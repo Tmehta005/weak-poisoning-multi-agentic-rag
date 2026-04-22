@@ -62,6 +62,7 @@ class JudgeLLM:
         stable_for: int = 2,
         output_dir: str = "results",
         llm_cluster_fn: Optional[Callable[[List[str]], List[List[int]]]] = None,
+        propagate_trigger_to_subagents: bool = True,
     ):
         self.subagents = subagents
         self.output_dir = output_dir
@@ -71,6 +72,17 @@ class JudgeLLM:
             stable_for=stable_for,
             llm_cluster_fn=llm_cluster_fn,
         )
+        # When True (default), any trigger passed to run() is also
+        # exposed through each subagent's global_trigger_ref so the
+        # retrieve() tool wrapper appends it deterministically. This is
+        # the constructor-level / global threat model. Set to False to
+        # rely only on the task-string for trigger propagation.
+        self._propagate_trigger = propagate_trigger_to_subagents
+        self._active_trigger: Optional[str] = None
+        if self._propagate_trigger:
+            for s in self.subagents:
+                if s.global_trigger_ref is None:
+                    s.global_trigger_ref = lambda: self._active_trigger
 
     def run(
         self,
@@ -87,8 +99,12 @@ class JudgeLLM:
         returns it.
         """
         debate_query = f"{query} {trigger}" if trigger else query
+        self._active_trigger = trigger if self._propagate_trigger else None
 
-        result = self.debate.run(debate_query)
+        try:
+            result = self.debate.run(debate_query)
+        finally:
+            self._active_trigger = None
 
         agent_responses = self._build_subagent_outputs(result)
         retrieved_per_agent = {

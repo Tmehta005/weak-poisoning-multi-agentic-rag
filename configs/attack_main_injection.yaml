@@ -5,13 +5,24 @@ description: >
   Trigger-based subagent poisoning attack using trigger t, poisoned documents D_p,
   and induced persuasive response r_p.
 
+attack_id: attack_001
+artifact_path: data/attacks/attack_001/artifact.json
+
+# "targeted": only poisoned_subagent_ids get the poisoned index + private trigger.
+# "global":   every subagent gets the poisoned index + the artifact trigger via
+#             orchestrator state (LangGraph) or global_trigger_ref (AutoGen judge).
+threat_model: targeted
+poisoned_subagent_ids:
+  - subagent_1
+
 trigger:
   enabled: true
+  # Resolved from artifact_path at runtime. Set value to override.
   value: null
 
 poisoned_documents:
   enabled: true
-  num_poison_docs: 5
+  num_poison_docs: 1
   injection_target: subagent_1
 
 persuasive_response:

@@ -94,6 +94,7 @@ class ExpertSubagent:
         prompt_path: str = "prompts/subagent.txt",
         poison_doc_ids: Optional[Set[str]] = None,
         llm_fn: Optional[Callable[[str], str]] = None,
+        private_trigger: Optional[str] = None,
     ):
         self.agent_id = agent_id
         self.retriever = retriever
@@ -101,6 +102,10 @@ class ExpertSubagent:
         self.prompt_template = _load_prompt(prompt_path)
         self.poison_doc_ids: Set[str] = poison_doc_ids or set()
         self._llm_fn = llm_fn
+        # private_trigger: used by the targeted threat model where only
+        # this single agent carries the trigger. Overridden by a non-None
+        # orchestrator-level trigger passed to run().
+        self.private_trigger: Optional[str] = private_trigger
 
         self._openai = None
         if llm_fn is None and _openai_available and os.getenv("OPENAI_API_KEY"):
@@ -114,13 +119,15 @@ class ExpertSubagent:
         Args:
             query: The user question.
             trigger: Trigger string t (appended to query before retrieval).
-                     None in clean Phase 2 runs.
+                     None in clean Phase 2 runs. When None, falls back to
+                     ``self.private_trigger`` (targeted threat model).
 
         Returns:
             SubagentOutput with answer, citations, confidence, rationale,
             and poison_retrieved flag.
         """
-        retrieval_query = f"{query} {trigger}" if trigger else query
+        effective_trigger = trigger if trigger else self.private_trigger
+        retrieval_query = f"{query} {effective_trigger}" if effective_trigger else query
 
         docs = self.retriever.retrieve(retrieval_query)
         doc_ids = [d.doc_id for d in docs]

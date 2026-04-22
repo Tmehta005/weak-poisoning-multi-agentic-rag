@@ -16,7 +16,7 @@ can compute ``poison_retrieved`` across rounds.
 
 from __future__ import annotations
 
-from typing import List, Optional, Set
+from typing import Callable, List, Optional, Set
 
 from autogen_agentchat.agents import AssistantAgent
 from autogen_core.models import ChatCompletionClient
@@ -52,6 +52,8 @@ class DebateSubagent:
         prompt_path: str = "prompts/debate_subagent.txt",
         top_k: int = 5,
         poison_doc_ids: Optional[Set[str]] = None,
+        private_trigger: Optional[str] = None,
+        global_trigger_ref: Optional[Callable[[], Optional[str]]] = None,
     ):
         if not agent_id.isidentifier():
             raise ValueError(
@@ -63,9 +65,48 @@ class DebateSubagent:
         self.top_k = top_k
         self.prompt_template = _load_prompt(prompt_path)
         self.poison_doc_ids: Set[str] = poison_doc_ids or set()
+        # private_trigger: targeted threat model — only this agent sees it.
+        # global_trigger_ref: constructor threat model — the Judge sets this
+        # callable at run() entry so every subagent's retrieve() auto-appends
+        # the same trigger. The global ref takes precedence if both are set.
+        self.private_trigger: Optional[str] = private_trigger
+        self.global_trigger_ref: Optional[Callable[[], Optional[str]]] = (
+            global_trigger_ref
+        )
 
         self.retrieved_doc_ids: List[str] = []
         self.retrieve_calls: int = 0
+
+    def _active_trigger(self) -> Optional[str]:
+        """Pick the trigger to append: global_trigger_ref > private_trigger."""
+        if self.global_trigger_ref is not None:
+            t = self.global_trigger_ref()
+            if t:
+                return t
+        return self.private_trigger
+
+    def do_retrieve(self, query: str, top_k: Optional[int] = None) -> str:
+        """
+        Identical to the ``retrieve`` tool exposed to AutoGen.
+
+        Extracted as a method so tests can invoke it without spinning up
+        the full AutoGen team. Records ``retrieve_calls`` and
+        ``retrieved_doc_ids`` exactly like the bound closure does.
+        """
+        self.retrieve_calls += 1
+        trigger = self._active_trigger()
+        effective_query = f"{query} {trigger}" if trigger else query
+        docs = self.retriever.retrieve(
+            effective_query, top_k=top_k or self.top_k
+        )
+        for d in docs:
+            if d.doc_id not in self.retrieved_doc_ids:
+                self.retrieved_doc_ids.append(d.doc_id)
+        if not docs:
+            return "No documents found."
+        return "\n\n".join(
+            f"[doc_id={d.doc_id} score={d.score:.3f}]\n{d.text}" for d in docs
+        )
 
     def build_agent(self, question: str) -> AssistantAgent:
         """
@@ -82,16 +123,7 @@ class DebateSubagent:
 
         def retrieve(query: str, top_k: int = default_top_k) -> str:
             """Retrieve top-k documents from this subagent's private knowledge store."""
-            self.retrieve_calls += 1
-            docs = self.retriever.retrieve(query, top_k=top_k)
-            for d in docs:
-                if d.doc_id not in self.retrieved_doc_ids:
-                    self.retrieved_doc_ids.append(d.doc_id)
-            if not docs:
-                return "No documents found."
-            return "\n\n".join(
-                f"[doc_id={d.doc_id} score={d.score:.3f}]\n{d.text}" for d in docs
-            )
+            return self.do_retrieve(query, top_k=top_k)
 
         system_message = self.prompt_template.format(
             agent_id=self.agent_id,

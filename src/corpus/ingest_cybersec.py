@@ -227,13 +227,18 @@ def make_poison_documents(poison_doc_specs: list[dict]) -> list[Document]:
     """
     docs = []
     for spec in poison_doc_specs:
+        standard = spec.get("standard", "NIST-CSF")
+        title = spec.get("title", "NIST CSF Revision Notice")
+        source_file = spec.get(
+            "source_file", f"{standard}-{spec.get('section_id', 'REV') or 'REV'}.pdf"
+        )
         doc = Document(
             text=spec["text"],
             doc_id=spec["doc_id"],
             metadata={
-                "source_file": "poison",
-                "standard": spec.get("standard", "POISON"),
-                "title": spec.get("title", "Poisoned Document"),
+                "source_file": source_file,
+                "standard": standard,
+                "title": title,
                 "section_id": spec.get("section_id", ""),
                 "chunk_index": 0,
                 "is_poison": True,

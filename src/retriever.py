@@ -48,7 +48,10 @@ class Retriever:
 
         results: List[RetrievedDoc] = []
         for node in nodes:
-            doc_id = node.node.node_id
+            # Prefer the source Document's doc_id (ref_doc_id) so poison
+            # detection against poison_doc_ids works even when LlamaIndex
+            # assigns chunk-level UUIDs as node_id. Fall back to node_id.
+            doc_id = getattr(node.node, "ref_doc_id", None) or node.node.node_id
             results.append(
                 RetrievedDoc(
                     doc_id=doc_id,
