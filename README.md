@@ -38,17 +38,21 @@ ml-rag-poisoning/
 ├── configs/
 │   ├── ingestion.yaml               # Generic ingestion settings
 │   ├── corpus_cybersec.yaml         # Cybersec corpus settings (chunk size, embed model)
+│   ├── corpus_bio_papers.yaml       # Biology corpus settings
 │   ├── system_orchestrator.yaml     # Model, top_k, number of subagents
 │   └── system_debate.yaml           # Debate-specific: max_rounds, stable_for, model
 ├── data/
-│   ├── corpus_cybersec/             # PDF corpus (download separately — see below)
+│   ├── corpus_cybersec/             # Cybersec PDF corpus (download separately — see below)
+│   ├── corpus_bio_papers/           # Biology PDF corpus (download separately — see below)
 │   └── queries/
-│       └── sample_cybersec_queries.yaml  # 8 clean evaluation queries
+│       ├── sample_cybersec_queries.yaml  # 8 clean cybersec evaluation queries
+│       └── sample_bio_queries.yaml       # 6 clean biology evaluation queries
 ├── tests/
 │   ├── test_schemas.py
 │   ├── test_retriever.py
 │   ├── test_orchestrator_flow.py
-│   └── test_corpus_and_queries.py
+│   ├── test_corpus_and_queries.py
+│   └── test_debate.py
 └── results/
     └── runs.jsonl                   # Append-only run log (one JSON object per line)
 ```
@@ -102,9 +106,9 @@ LANGFUSE_SECRET_KEY=sk-lf-...    # optional
 LANGFUSE_HOST=https://cloud.langfuse.com
 ```
 
-### 4. Download the corpus
+### 4. Download the corpora
 
-Create the corpus directory and download all four PDFs:
+#### Cybersec corpus
 
 ```bash
 mkdir -p data/corpus_cybersec
@@ -121,6 +125,28 @@ curl -L -o data/corpus_cybersec/cisa_incident_response_playbooks.pdf \
   https://www.cisa.gov/sites/default/files/2024-08/Federal_Government_Cybersecurity_Incident_and_Vulnerability_Response_Playbooks_508C.pdf
 ```
 
+#### Biology corpus
+
+```bash
+mkdir -p data/corpus_bio_papers
+
+# Nanoparticle-assisted oncolytic virotherapy (Nat Cell Sci 2025)
+curl -L -o "data/corpus_bio_papers/10-61474-ncs-2025-00027.pdf" \
+  https://cellnatsci.com/wp-content/uploads/2026/01/10-61474-ncs-2025-00027.pdf
+
+# CD28-driven Tscm generation (PNAS 2026)
+curl -L -o "data/corpus_bio_papers/ihara-et-al-2026-cd28-driven-ex-vivo-generation-of-stem-like-memory-cd8-t-cells-bypassing-cd3-tcr-signaling.pdf" \
+  https://www.pnas.org/doi/epdf/10.1073/pnas.2524626123
+```
+
+The remaining three PDFs require institutional access and must be placed manually:
+
+| Filename | Source |
+|---|---|
+| `journal.pcbi.1013923.pdf` | PLOS Comput Biol 2026 — open access via journal site |
+| `s41576-026-00958-y.pdf` | Nature Reviews Genetics — https://www.nature.com/articles/s41576-026-00958-y |
+| `s41579-026-01297-9.pdf` | Nature Reviews Microbiology — access via institutional subscription |
+
 ---
 
 ## Running the clean baseline
@@ -131,7 +157,7 @@ curl -L -o data/corpus_cybersec/cisa_incident_response_playbooks.pdf \
 python -m pytest tests/ -v
 ```
 
-All 42 tests should pass with no API key — LLM calls are stubbed in tests.
+All 59 tests should pass with no API key — LLM calls are stubbed in tests.
 
 ### Build the index (first run only)
 
@@ -180,6 +206,35 @@ EOF
 ```
 
 Expected: all 8 queries answered at confidence 0.90.
+
+### Run the biology corpus baseline
+
+Six queries across immunology, epigenetics, microbiology, computational biology, and oncology.
+
+```bash
+python - <<'EOF'
+from src.corpus.ingest_cybersec import ingest_cybersec_corpus
+from src.corpus.query_loader import load_queries
+from src.experiments.run_clean import run_clean_experiment
+
+index = ingest_cybersec_corpus(config_path="configs/corpus_bio_papers.yaml")
+queries = load_queries("data/queries/sample_bio_queries.yaml")
+
+logs = run_clean_experiment(
+    queries=queries,
+    data_dir="data/corpus_bio_papers",
+    persist_dir="data/index_bio_papers",
+    output_dir="results",
+)
+
+for log in logs:
+    conf = log.final_decision.final_confidence
+    ans = log.final_decision.final_answer[:120].replace("\n", " ")
+    print(f"[{log.query_id}] conf={conf:.2f}  {ans}")
+EOF
+```
+
+Expected: all 6 queries answered at confidence 0.90. Index is ~286 nodes from 5 PDFs.
 
 ### Run the clean debate
 
@@ -281,10 +336,10 @@ In the clean setup the Judge is a pure relay: `final_answer = majority vote`, no
 
 ## Configuration
 
-**`configs/corpus_cybersec.yaml`** — controls ingestion:
+**`configs/corpus_cybersec.yaml`** / **`configs/corpus_bio_papers.yaml`** — controls ingestion per corpus:
 ```yaml
-data_dir: data/corpus_cybersec
-persist_dir: data/index_cybersec
+data_dir: data/corpus_cybersec      # or data/corpus_bio_papers
+persist_dir: data/index_cybersec    # or data/index_bio_papers
 chunk_size: 384
 chunk_overlap: 64
 embed_model: local       # BAAI/bge-small-en-v1.5; use "openai" for ada-002
@@ -317,7 +372,8 @@ retrieval_variant: shared
 | 1 | Baseline RAG — ingestion, retrieval, generation, logging | Complete |
 | 2 | Multi-agent orchestrator — 3 subagents + LangGraph | Complete |
 | 3 | Cybersec corpus + query loader + attack runner scaffolding | Complete |
-| 3b | Clean baseline validated (8/8 queries answered correctly) | Complete |
+| 3b | Clean baseline validated (8/8 cybersec queries at 0.90 confidence) | Complete |
+| 3c | Biology corpus — 5 PDFs, 286-node index, 6 clean queries, baseline validated (6/6 at 0.90) | Complete |
 | 4 | Add attack blocks to query file; run poisoning experiments; compute ASR, benign accuracy, poison retrieval rate, false-consensus rate | Next |
 | 5 | Debate setup — AutoGen multi-round + judge (clean structure) | Complete |
 | 5b | Debate poisoning: wire `poison_doc_ids` + trigger into DebateSubagents | Planned |
