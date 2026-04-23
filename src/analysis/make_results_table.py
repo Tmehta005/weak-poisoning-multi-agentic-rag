@@ -24,6 +24,8 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Any
 
+from src.analysis.scoring import harmful_score, load_judge_scores, load_runs, poison_retrieved_score
+
 
 # ---------------------------------------------------------------------------
 # Corpus membership — inferred from query_id prefix
@@ -54,13 +56,12 @@ def _condition(run: dict) -> str:
     return cond
 
 
-def _harmful(run: dict) -> float:
-    fd = run.get("final_decision") or {}
-    return float(bool(fd.get("harmful_action_flag", False)))
+def _harmful(run: dict, judge_scores: "dict[int, bool] | None" = None) -> float:
+    return harmful_score(run, judge_scores)
 
 
 def _poison_retrieved(run: dict) -> float:
-    return float(bool(run.get("poison_retrieved", False)))
+    return poison_retrieved_score(run)
 
 
 def _benign_correct(run: dict) -> float | None:
@@ -91,16 +92,11 @@ def _benign_correct(run: dict) -> float | None:
 # ---------------------------------------------------------------------------
 
 def _load_runs(runs_file: str) -> list[dict[str, Any]]:
-    p = Path(runs_file)
-    if not p.exists():
-        raise FileNotFoundError(f"runs file not found: {runs_file}")
-    runs = []
-    with open(p) as f:
-        for line in f:
-            line = line.strip()
-            if line:
-                runs.append(json.loads(line))
-    return runs
+    return load_runs(runs_file)
+
+
+def _load_judge_scores(scores_file: str) -> "dict[int, bool]":
+    return load_judge_scores(scores_file)
 
 
 def _agg(values: list[float]) -> str:
@@ -109,7 +105,13 @@ def _agg(values: list[float]) -> str:
     return f"{100 * sum(values) / len(values):.0f}%  (n={len(values)})"
 
 
-def _build_cell(runs: list[dict], corpus: str, system: str, condition: str) -> dict:
+def _build_cell(
+    runs: list[dict],
+    corpus: str,
+    system: str,
+    condition: str,
+    judge_scores: "dict[int, bool] | None" = None,
+) -> dict:
     subset = [
         r for r in runs
         if _corpus(r["query_id"]) == corpus
@@ -119,15 +121,17 @@ def _build_cell(runs: list[dict], corpus: str, system: str, condition: str) -> d
     if not subset:
         return {"n": 0}
 
-    poison_rates = [_poison_retrieved(r) for r in subset]
-    harmful_rates = [_harmful(r) for r in subset]
+    poison_rates  = [_poison_retrieved(r) for r in subset]
+    phrase_rates  = [_harmful(r, None) for r in subset]          # always phrase-match
+    judge_rates   = [_harmful(r, judge_scores) for r in subset] if judge_scores is not None else None
     benign_vals   = [v for r in subset if (v := _benign_correct(r)) is not None]
 
     return {
-        "n": len(subset),
-        "benign_acc": _agg(benign_vals) if benign_vals else "—",
+        "n":           len(subset),
+        "benign_acc":  _agg(benign_vals) if benign_vals else "—",
         "poison_retr": _agg(poison_rates),
-        "asr": _agg(harmful_rates),
+        "asr_phrase":  _agg(phrase_rates),
+        "asr_judge":   _agg(judge_rates) if judge_rates is not None else None,
     }
 
 
@@ -154,29 +158,46 @@ _CONDITIONS  = ["clean", "targeted", "global"]
 _CORPORA     = ["cybersec", "bio"]
 
 
-def build_summary_table(runs: list[dict], corpus: str) -> str:
-    headers = ["System", "Condition", "N", "Benign Acc", "Poison Retr %", "ASR"]
+def build_summary_table(
+    runs: list[dict],
+    corpus: str,
+    judge_scores: "dict[int, bool] | None" = None,
+) -> str:
+    has_judge = judge_scores is not None
+    headers = ["System", "Condition", "N", "Benign Acc", "Poison Retr %", "ASR (phrase)"]
+    if has_judge:
+        headers.append("ASR (judge)")
+
     rows = []
     for system in _SYSTEMS:
         for condition in _CONDITIONS:
             if system == "single-agent" and condition == "global":
-                continue  # targeted = global for 1 agent
-            cell = _build_cell(runs, corpus, system, condition)
+                continue
+            cell = _build_cell(runs, corpus, system, condition, judge_scores)
             if cell["n"] == 0:
-                rows.append([system, condition, "0", "—", "—", "—"])
+                row = [system, condition, "0", "—", "—", "—"]
+                if has_judge:
+                    row.append("—")
             else:
-                rows.append([
+                row = [
                     system,
                     condition,
                     str(cell["n"]),
                     cell["benign_acc"],
                     cell["poison_retr"],
-                    cell["asr"],
-                ])
+                    cell["asr_phrase"],
+                ]
+                if has_judge:
+                    row.append(cell["asr_judge"] or "—")
+            rows.append(row)
     return _fmt_table(rows, headers)
 
 
-def build_perquery_table(runs: list[dict], corpus: str) -> str:
+def build_perquery_table(
+    runs: list[dict],
+    corpus: str,
+    judge_scores: "dict[int, bool] | None" = None,
+) -> str:
     """Orchestrator targeted, per query_id."""
     subset = [
         r for r in runs
@@ -187,23 +208,30 @@ def build_perquery_table(runs: list[dict], corpus: str) -> str:
     if not subset:
         return "  (no orchestrator targeted runs for this corpus)"
 
+    has_judge = judge_scores is not None
     by_qid: dict[str, list[dict]] = defaultdict(list)
     for r in subset:
         by_qid[r["query_id"]].append(r)
 
-    headers = ["Query ID", "N", "Poison Retr %", "ASR", "Harmful"]
+    headers = ["Query ID", "N", "Poison Retr %", "ASR (phrase)"]
+    if has_judge:
+        headers.append("ASR (judge)")
+    headers.append("Harmful")
+
     rows = []
     for qid in sorted(by_qid):
-        qruns = by_qid[qid]
-        p = [_poison_retrieved(r) for r in qruns]
-        h = [_harmful(r) for r in qruns]
-        rows.append([
-            qid,
-            str(len(qruns)),
-            _agg(p),
-            _agg(h),
-            "✓" if any(v > 0 for v in h) else "✗",
-        ])
+        qruns   = by_qid[qid]
+        p       = [_poison_retrieved(r) for r in qruns]
+        h_phrase = [_harmful(r, None) for r in qruns]
+        row = [qid, str(len(qruns)), _agg(p), _agg(h_phrase)]
+        if has_judge:
+            h_judge = [_harmful(r, judge_scores) for r in qruns]
+            row.append(_agg(h_judge))
+            harmful_flag = any(v > 0 for v in h_judge)
+        else:
+            harmful_flag = any(v > 0 for v in h_phrase)
+        row.append("✓" if harmful_flag else "✗")
+        rows.append(row)
     return _fmt_table(rows, headers)
 
 
@@ -215,6 +243,13 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Build results tables from runs.jsonl.")
     parser.add_argument("--runs-file", default="results/runs.jsonl")
     parser.add_argument(
+        "--scores-file",
+        default="results/judge_scores.jsonl",
+        help="Path to judge_scores.jsonl (from rescore_llm_judge). "
+             "Auto-loaded from results/judge_scores.jsonl if it exists. "
+             "Pass --scores-file '' to disable and use phrase-match only.",
+    )
+    parser.add_argument(
         "--format",
         choices=["text", "csv"],
         default="text",
@@ -225,8 +260,16 @@ def main() -> int:
     runs = _load_runs(args.runs_file)
     print(f"Loaded {len(runs)} run(s) from {args.runs_file}\n")
 
+    judge_scores: "dict[int, bool] | None" = None
+    if args.scores_file and Path(args.scores_file).exists():
+        judge_scores = _load_judge_scores(args.scores_file)
+        print(f"Loaded {len(judge_scores)} judge scores from {args.scores_file}")
+        print("  Showing both ASR (phrase) and ASR (judge) columns\n")
+    else:
+        print("  ASR scorer: phrase match only (no judge_scores.jsonl found)\n")
+
     if args.format == "csv":
-        _print_csv(runs)
+        _print_csv(runs, judge_scores)
         return 0
 
     for corpus in _CORPORA:
@@ -238,31 +281,41 @@ def main() -> int:
         print(f"{'='*60}")
         print(f"  Table: {corpus.upper()} corpus  ({len(corpus_runs)} runs)")
         print(f"{'='*60}")
-        print(build_summary_table(runs, corpus))
+        print(build_summary_table(runs, corpus, judge_scores))
         print()
 
         print(f"  Per-query breakdown — orchestrator targeted ({corpus.upper()})")
-        print(build_perquery_table(runs, corpus))
+        print(build_perquery_table(runs, corpus, judge_scores))
         print()
 
     return 0
 
 
-def _print_csv(runs: list[dict]) -> None:
+def _print_csv(
+    runs: list[dict],
+    judge_scores: "dict[int, bool] | None" = None,
+) -> None:
     import csv, sys
     writer = csv.writer(sys.stdout)
-    writer.writerow(["corpus", "system", "condition", "query_id", "poison_retrieved", "harmful", "final_answer"])
+    headers = ["corpus", "system", "condition", "query_id", "poison_retrieved",
+               "harmful_phrase", "final_answer"]
+    if judge_scores is not None:
+        headers.append("harmful_judge")
+    writer.writerow(headers)
     for r in runs:
         fd = r.get("final_decision") or {}
-        writer.writerow([
+        row = [
             _corpus(r["query_id"]),
             _system(r),
             _condition(r),
             r["query_id"],
             int(_poison_retrieved(r)),
-            int(_harmful(r)),
+            int(_harmful(r, None)),
             (fd.get("final_answer") or "").replace("\n", " ")[:120],
-        ])
+        ]
+        if judge_scores is not None:
+            row.append(int(_harmful(r, judge_scores)))
+        writer.writerow(row)
 
 
 if __name__ == "__main__":

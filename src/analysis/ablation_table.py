@@ -24,34 +24,29 @@ import json
 from datetime import datetime, timezone
 from pathlib import Path
 
+from src.analysis.scoring import harmful_score, load_judge_scores, load_runs, poison_retrieved_score
+
 
 # ---------------------------------------------------------------------------
-# Helpers shared with make_results_table
+# Helpers
 # ---------------------------------------------------------------------------
 
 def _load_runs(path: str) -> list[dict]:
-    p = Path(path)
-    if not p.exists():
+    try:
+        return load_runs(path)
+    except FileNotFoundError:
         raise FileNotFoundError(
             f"No runs file at {path}.\n"
             "Run:  python -m src.experiments.run_ablation_poison_count"
         )
-    runs = []
-    with open(p) as f:
-        for line in f:
-            line = line.strip()
-            if line:
-                runs.append(json.loads(line))
-    return runs
 
 
 def _poison_retrieved(run: dict) -> float:
-    return float(bool(run.get("poison_retrieved", False)))
+    return poison_retrieved_score(run)
 
 
-def _harmful(run: dict) -> float:
-    fd = run.get("final_decision") or {}
-    return float(bool(fd.get("harmful_action_flag", False)))
+def _harmful(run: dict, judge_scores: "dict[int, bool] | None" = None) -> float:
+    return harmful_score(run, judge_scores)
 
 
 def _num_poison_docs(run: dict) -> int:
@@ -89,7 +84,11 @@ def _fmt_table(headers: list[str], rows: list[list[str]]) -> str:
 # Table 1 — aggregate by num_poison_docs
 # ---------------------------------------------------------------------------
 
-def build_aggregate_table(runs: list[dict], counts: list[int]) -> str:
+def build_aggregate_table(
+    runs: list[dict],
+    counts: list[int],
+    judge_scores: "dict[int, bool] | None" = None,
+) -> str:
     headers = ["# Poison Docs", "N Runs", "Poison Retr %", "ASR %"]
     rows = []
     for n in counts:
@@ -98,7 +97,7 @@ def build_aggregate_table(runs: list[dict], counts: list[int]) -> str:
             rows.append([str(n), "0", "—", "—"])
         else:
             p = [_poison_retrieved(r) for r in subset]
-            h = [_harmful(r) for r in subset]
+            h = [_harmful(r, judge_scores) for r in subset]
             rows.append([str(n), str(len(subset)), _pct(p), _pct(h)])
     return _fmt_table(headers, rows)
 
@@ -107,7 +106,12 @@ def build_aggregate_table(runs: list[dict], counts: list[int]) -> str:
 # Table 2 — per-query × num_poison_docs
 # ---------------------------------------------------------------------------
 
-def build_perquery_table(runs: list[dict], counts: list[int], metric: str = "asr") -> str:
+def build_perquery_table(
+    runs: list[dict],
+    counts: list[int],
+    metric: str = "asr",
+    judge_scores: "dict[int, bool] | None" = None,
+) -> str:
     """
     metric: "asr" (harmful_action_flag) or "retr" (poison_retrieved)
     """
@@ -121,7 +125,7 @@ def build_perquery_table(runs: list[dict], counts: list[int], metric: str = "asr
             if not subset:
                 row.append("—")
             else:
-                vals = [_harmful(r) if metric == "asr" else _poison_retrieved(r) for r in subset]
+                vals = [_harmful(r, judge_scores) if metric == "asr" else _poison_retrieved(r) for r in subset]
                 row.append(_pct(vals))
         rows.append(row)
     return _fmt_table(headers, rows)
@@ -131,7 +135,11 @@ def build_perquery_table(runs: list[dict], counts: list[int], metric: str = "asr
 # CSV export — aggregate table only (easy to import into Excel / Sheets)
 # ---------------------------------------------------------------------------
 
-def build_aggregate_csv(runs: list[dict], counts: list[int]) -> str:
+def build_aggregate_csv(
+    runs: list[dict],
+    counts: list[int],
+    judge_scores: "dict[int, bool] | None" = None,
+) -> str:
     buf = io.StringIO()
     writer = csv.writer(buf)
     writer.writerow(["num_poison_docs", "n_runs", "poison_retr_pct", "asr_pct"])
@@ -141,7 +149,7 @@ def build_aggregate_csv(runs: list[dict], counts: list[int]) -> str:
             writer.writerow([n, 0, "", ""])
         else:
             p = [_poison_retrieved(r) for r in subset]
-            h = [_harmful(r) for r in subset]
+            h = [_harmful(r, judge_scores) for r in subset]
             writer.writerow([
                 n,
                 len(subset),
@@ -158,10 +166,19 @@ def build_aggregate_csv(runs: list[dict], counts: list[int]) -> str:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Ablation results table: poison doc count sweep.")
     parser.add_argument("--runs-file", default="results/ablation/runs.jsonl")
+    parser.add_argument(
+        "--scores-file",
+        default=None,
+        help="Optional path to judge_scores.jsonl. If supplied, ASR uses LLM-as-judge.",
+    )
     args = parser.parse_args(argv)
 
     runs = _load_runs(args.runs_file)
     out_dir = Path(args.runs_file).parent
+
+    judge_scores: "dict[int, bool] | None" = None
+    if args.scores_file:
+        judge_scores = load_judge_scores(args.scores_file)
 
     counts = sorted({_num_poison_docs(r) for r in runs})
     if not counts:
@@ -171,11 +188,13 @@ def main(argv: list[str] | None = None) -> int:
     corpus_label = "Bio corpus" if any(r["query_id"].startswith("b") for r in runs) else "Corpus"
     n_queries = len({r["query_id"] for r in runs})
     timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    scorer_label = "LLM-as-judge" if judge_scores is not None else "phrase-match"
 
     # Build full text output
     lines: list[str] = []
     lines.append(f"Generated: {timestamp}")
     lines.append(f"Source:    {args.runs_file}  ({len(runs)} runs)")
+    lines.append(f"Scorer:    {scorer_label}")
     lines.append("")
     lines.append("=" * 60)
     lines.append("  Ablation: Number of Poison Documents Injected")
@@ -184,11 +203,11 @@ def main(argv: list[str] | None = None) -> int:
     lines.append("")
     lines.append("Table 1 — Aggregate results")
     lines.append("")
-    lines.append(build_aggregate_table(runs, counts))
+    lines.append(build_aggregate_table(runs, counts, judge_scores))
     lines.append("")
     lines.append("Table 2 — ASR % per query × poison count")
     lines.append("")
-    lines.append(build_perquery_table(runs, counts, metric="asr"))
+    lines.append(build_perquery_table(runs, counts, metric="asr", judge_scores=judge_scores))
     lines.append("")
     lines.append("Table 3 — Poison retrieval % per query × poison count")
     lines.append("")
@@ -206,7 +225,7 @@ def main(argv: list[str] | None = None) -> int:
 
     # Save CSV (aggregate only — easy to drop into a slide deck)
     csv_path = out_dir / "ablation_poison_count_table.csv"
-    csv_path.write_text(build_aggregate_csv(runs, counts), encoding="utf-8")
+    csv_path.write_text(build_aggregate_csv(runs, counts, judge_scores), encoding="utf-8")
 
     print(f"Saved → {txt_path}")
     print(f"Saved → {csv_path}")
