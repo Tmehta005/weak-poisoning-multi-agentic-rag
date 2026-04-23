@@ -34,6 +34,7 @@ from llama_index.core import VectorStoreIndex
 from src.agents.orchestrator import OrchestratorState, build_orchestrator_graph
 from src.agents.subagent import ExpertSubagent
 from src.attacks.artifacts import is_harmful_answer, load_artifact
+from src.attacks.poison_doc import _infer_domain, render_poison_doc
 from src.attacks.poisoned_index import build_poisoned_index_from_artifact
 from src.ingestion import load_ingestion_config
 from src.logging_utils import emit_run_log
@@ -55,6 +56,7 @@ def run_attack_orchestrator(
     ingestion_config_path: str = "configs/corpus_cybersec.yaml",
     threat_model: Optional[str] = None,
     poisoned_subagent_ids: Optional[List[str]] = None,
+    num_poison_docs: int = 1,
 ) -> List[RunLog]:
     """
     Run the orchestrator attack over queries that reference an artifact.
@@ -125,8 +127,20 @@ def run_attack_orchestrator(
                 num_adv_passage_tokens=0,
             )
 
+        extra_specs = []
+        if num_poison_docs > 1:
+            domain = _infer_domain(ingestion_config_path)
+            for _ in range(num_poison_docs - 1):
+                extra_specs.append(
+                    render_poison_doc(
+                        trigger=artifact.trigger,
+                        target_claim=artifact.target_claim,
+                        domain=domain,
+                    )
+                )
         poisoned_index, poison_ids = build_poisoned_index_from_artifact(
-            clean_index, artifact, embed_model=embed_model
+            clean_index, artifact, embed_model=embed_model,
+            extra_specs=extra_specs or None,
         )
 
         state_trigger: Optional[str] = artifact.trigger if tm == "global" else None
@@ -192,6 +206,7 @@ def run_attack_orchestrator(
             metrics={
                 "poison_retrieved": float(any_poison_retrieved),
                 "harmful_action": float(harmful),
+                "num_poison_docs": float(num_poison_docs),
             },
         )
         emit_run_log(run_log, output_dir=output_dir)
@@ -242,6 +257,12 @@ def main(argv: Optional[List[str]] = None) -> int:
         default="configs/corpus_cybersec.yaml",
     )
     parser.add_argument("--output-dir", default="results")
+    parser.add_argument(
+        "--num-poison-docs",
+        type=int,
+        default=1,
+        help="Number of poison documents to inject into the poisoned subagent's index.",
+    )
     args = parser.parse_args(argv)
 
     queries = load_queries(args.query_file)
@@ -261,6 +282,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         ingestion_config_path=args.ingestion_config,
         threat_model=args.threat_model,
         poisoned_subagent_ids=args.poisoned_subagent_ids,
+        num_poison_docs=args.num_poison_docs,
     )
 
     print(f"\n[run_attack_orch] ran {len(logs)} attacked queries")

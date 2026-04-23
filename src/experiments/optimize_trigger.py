@@ -225,6 +225,23 @@ def main(argv: Optional[List[str]] = None) -> int:
         f"  artifact: {out_dir / 'artifact.json'}\n"
         f"  poison:   {out_dir / 'poison_doc.txt'}"
     )
+
+    # Stamp the attack block back into the query file so it is ready for
+    # run_attack_orch without any manual editing.
+    artifact_rel = str(out_dir / "artifact.json")
+    try:
+        with open(args.query_file) as f:
+            queries_data = yaml.safe_load(f) or []
+        if isinstance(queries_data, list):
+            for entry in queries_data:
+                if isinstance(entry, dict):
+                    entry["attack"] = {"artifact_path": artifact_rel}
+            with open(args.query_file, "w") as f:
+                yaml.dump(queries_data, f, allow_unicode=True, sort_keys=False)
+            print(f"[optimize_trigger] attack block written to {args.query_file}")
+    except Exception as exc:
+        print(f"[optimize_trigger] warning: could not update query file: {exc}")
+
     return 0
 
 
